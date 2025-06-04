@@ -37,17 +37,10 @@ def build_action_set(
     return [(q, p) for q in range(1, max_q + 1) for p in prices]
 
 
-def info_key(
-        role: str, #[0 = buyer, 1 = seller]
-        phase: int, #[0 = initial, 1 = early, 2 = middle, 3 = late]
-        qty_needed: int, #[0-10]
-        qty_cmp: int, #[-1 = lower, 0 = same, 1 = higher]
-        price_cmp: int, #[-1 = lower, 0 = same, 1 = higher]
-        low_cash: int, #[0 = false,1 = true]
-    ) -> str:
+def info_key(role: str, phase: int, qty_cmp: int, price_cmp: int) -> str:
     """Serialize infoset into a compact string key."""
 
-    return f"{role}|{phase:+d}|{qty_needed:+d}|{qty_cmp:+d}|{price_cmp:+d}|{low_cash:+d}"
+    return f"{role}|{phase}|{qty_cmp:+d}|{price_cmp:+d}"
 
 
 #  CFR trainer (tabular, two‑player zero‑sum)
@@ -77,9 +70,8 @@ class CFRTrainer:
 
         self.regret_history = []
         self.PLOT_EXPLOITABILITY = True
-        self.LOW_CASH_PROBABILITY = 0.2
 
-    def train(self, iters: int = 100_000):
+    def train(self, iters: int = 200_000):
         for t in range(iters):
             if t % 10000 == 0:
                 print(f"{t} iterations done")
@@ -116,18 +108,8 @@ class CFRTrainer:
 
             qty_cmp   = 0 if last_q == needed else int(math.copysign(1, last_q - needed))
             price_cmp = 0 if last_p == 0     else int(math.copysign(1, last_p))
-            low_cash = int(random.random() < self.LOW_CASH_PROBABILITY) #simlated probability of having a low cash balance
 
-
-            if round_no == 0:
-                phase = 0
-            elif round_no <= 2:
-                phase = 1
-            elif round_no <= 7:
-                phase = 2
-            else:
-                phase = 3
-            I = info_key(role, phase, needed, qty_cmp, price_cmp, low_cash)
+            I = info_key(role, round_no, qty_cmp, price_cmp)
 
             sigma = self._get_strategy(I)
 
@@ -145,8 +127,7 @@ class CFRTrainer:
                     base = -abs(q - needed) / needed
                 # price component (seller likes +p, buyer likes –p)
                 price_term = self.alpha * (p if role == "S" else -p)
-                cash_penalty = 0.1 * (q * abs(p)) if low_cash else 0.0
-                U[i] = base + price_term - cash_penalty
+                U[i] = base + price_term
 
             u_ref = U[a_idx] # util
             self.regret_sum[I]   += U - u_ref  # vectorised counterfactual regrets
@@ -206,24 +187,7 @@ class CFROneShotAgent(OneShotAgent):
         else:
             qty_cmp = int(math.copysign(1, offer[QUANTITY] - needed)) if offer[QUANTITY] != needed else 0
             price_cmp = int(math.copysign(1, offer[UNIT_PRICE] - self.mid_price)) if offer[UNIT_PRICE] != self.mid_price else 0
-        
-        step = state.step
-        if step == 0:
-            phase = 0  # initial
-        elif step <= 2:
-            phase = 1  # early
-        elif step <= 7:
-            phase = 2  # mid
-        else:
-            phase = 3  # late
-
-        
-        #TODO: set low cash flag according to balance
-        low_cash = int(self.awi.current_balance < 1000)  # or any threshold you define
-
-        return info_key(role, phase, needed, qty_cmp, price_cmp, low_cash)    
-
-    
+        return info_key(role, state.step, qty_cmp, price_cmp)
 
     def _sample_action(self, infoset: str, role: str) -> Tuple[int, int]:
         pmf = self.policy.get(infoset) #this gets a distribution we can sample an action from
@@ -301,7 +265,6 @@ def _train_cli():
         plt.title("CFR Convergence")
         plt.grid()
         plt.show()
-        plt.savefig('img/last_training.png')
 
 
 if __name__ == "__main__":
